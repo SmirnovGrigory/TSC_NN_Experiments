@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 
 import tqdm
 
-from sklearn.metrics import f1_score, balanced_accuracy_score, recall_score
+from sklearn.metrics import f1_score, balanced_accuracy_score, precision_score, recall_score
 
 # def map_to_scores2(x):
 #     if x == 1:
@@ -24,6 +24,11 @@ from sklearn.metrics import f1_score, balanced_accuracy_score, recall_score
 #
 #     def __getitem__(self, i):
 #         return torch.tensor([self.x.iloc[i][0]]).float(), map_to_scores2(float(self.y[i]))
+
+def print_metrics(predictions, y_test):
+	print("PRECISION: ", metrics.precision_score(list(map(lambda x: int(x), y_test)), predictions, average='macro'))
+	print("RECALL: ",metrics.recall_score(list(map(lambda x: int(x), y_test)), predictions, average='macro'))
+	print("F1: ", metrics.f1_score(list(map(lambda x: int(x), y_test)), predictions, average='macro'))
 
 def map_to_scores(x):
     if x == 0.0:
@@ -91,7 +96,7 @@ def evaluate(model, dataloader_test):
     return get_f1_acc_recall(lst, targets)
 
 
-def train_loop(model, epochs, optim, loss_fn, dataloader_train, dataloader_test, n_batches):
+def train_loop(model, epochs, scheduler, optim, loss_fn, dataloader_train, dataloader_test, n_batches):
     best_rec = 0
     best_f1 = 0
     for epoch in range(epochs):
@@ -103,8 +108,8 @@ def train_loop(model, epochs, optim, loss_fn, dataloader_train, dataloader_test,
             loss = loss_fn(pred, y)
             optim.zero_grad()
             loss.backward()
-            #scheduler.step(loss)
             optim.step()
+            scheduler.step(loss)
 
             if i % 10 == 0:
                 print(f"train loss: {loss.item():>5f}")

@@ -1,3 +1,5 @@
+import multiprocessing
+
 from sktime.classification.hybrid import HIVECOTEV1
 
 from datetime import datetime
@@ -18,11 +20,16 @@ from sktime.classification.shapelet_based import ShapeletTransformClassifier
 import torch
 import torch.nn as nn
 
+from torch.autograd import Variable
+
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
 import time
 
+import os
+from multiprocessing import Process
+from multiprocessing.pool import Pool
 
 class TSCDataset_MY(Dataset):
     def __init__(self, X):
@@ -34,6 +41,9 @@ class TSCDataset_MY(Dataset):
     def __getitem__(self, i):
         return torch.tensor([self.x[i]]).float()
 
+def parallelFitWrapper(X, y, model, name):
+    model.fit(X,y)
+    model.save("./" + name)
 
 class HIVECOTEV1_MY(HIVECOTEV1):
     _tags = {
@@ -98,6 +108,7 @@ class HIVECOTEV1_MY(HIVECOTEV1):
         ending in "_" and sets is_fitted flag to True.
         """
         # Default values from HC1 paper
+        print("STARTED")
         if self.stc_params is None:
             self._stc_params = {"transform_limit_in_minutes": 120}
         if self.tsf_params is None:
@@ -121,7 +132,59 @@ class HIVECOTEV1_MY(HIVECOTEV1):
             random_state=self.random_state,
             n_jobs=self._threads_to_use,
         )
-        self._stc.fit(X, y)
+        #self._stc.fit(X, y)
+
+        # Build TSF
+        self._tsf = TimeSeriesForestClassifier(
+            **self._tsf_params,
+            random_state=self.random_state,
+            n_jobs=self._threads_to_use,
+        )
+        #self._tsf.fit(X, y)
+
+        # Build RISE
+        self._rise = RandomIntervalSpectralEnsemble(
+            **self._rise_params,
+            random_state=self.random_state,
+            n_jobs=self._threads_to_use,
+        )
+        print("RISE training")
+        self._rise.fit(X, y)
+
+        # Build cBOSS
+        self._cboss = ContractableBOSS(
+            **self._cboss_params,
+            random_state=self.random_state,
+            n_jobs=self._threads_to_use,
+        )
+        #self._cboss.fit(X, y)
+        
+        # proc_stc = Process(target=parallelFitWrapper, args=(X, y, self._stc, "stc"))
+        # proc_tsf = Process(target=parallelFitWrapper, args=(X, y, self._tsf, "tsf"))
+        # proc_rise = Process(target=parallelFitWrapper, args=(X, y, self._rise, "rise"))
+        # proc_cboss = Process(target=parallelFitWrapper, args=(X, y, self._cboss, "cboss"))
+        # procs = [proc_stc, proc_tsf, proc_rise, proc_cboss]
+        # print("TRAINING IS STARTED")
+        # for proc in procs:
+        #     proc.start()
+        #
+        # for proc in procs:
+        #     proc.join()
+
+        with Pool(processes=4) as pool:
+            print("parrallel training")
+            proc_stc = pool.apply_async(parallelFitWrapper, (X, y, self._stc, "stc"))
+            proc_tsf = pool.apply_async(parallelFitWrapper, (X, y, self._tsf, "tsf"))
+            #proc_rise = pool.apply_async(parallelFitWrapper, (X, y, self._rise, "rise"))
+            proc_cboss = pool.apply_async(parallelFitWrapper, (X, y, self._cboss, "cboss"))
+            procs = [proc_stc, proc_tsf, proc_cboss]
+            for proc in procs:
+                proc.get()
+
+        self._stc = self._stc.load_from_path("/home/ironic/repos/TSC_NN_Experiments/stc.zip")
+        self._tsf =self._tsf.load_from_path("/home/ironic/repos/TSC_NN_Experiments/tsf.zip")
+        #self._rise = self._rise.load_from_path("/home/ironic/repos/TSC_NN_Experiments/rise.zip")
+        self._cboss = self._cboss.load_from_path("/home/ironic/repos/TSC_NN_Experiments/cboss.zip")
 
         if self.verbose > 0:
             print("STC ", datetime.now().strftime("%H:%M:%S %d/%m/%Y"))  # noqa
@@ -137,14 +200,6 @@ class HIVECOTEV1_MY(HIVECOTEV1):
                 datetime.now().strftime("%H:%M:%S %d/%m/%Y"),
             )
             print("STC weight = " + str(self.stc_weight_))  # noqa
-
-        # Build TSF
-        self._tsf = TimeSeriesForestClassifier(
-            **self._tsf_params,
-            random_state=self.random_state,
-            n_jobs=self._threads_to_use,
-        )
-        self._tsf.fit(X, y)
 
         if self.verbose > 0:
             print("TSF ", datetime.now().strftime("%H:%M:%S %d/%m/%Y"))  # noqa
@@ -168,14 +223,6 @@ class HIVECOTEV1_MY(HIVECOTEV1):
             )
             print("TSF weight = " + str(self.tsf_weight_))  # noqa
 
-        # Build RISE
-        self._rise = RandomIntervalSpectralEnsemble(
-            **self._rise_params,
-            random_state=self.random_state,
-            n_jobs=self._threads_to_use,
-        )
-        self._rise.fit(X, y)
-
         if self.verbose > 0:
             print("RISE ", datetime.now().strftime("%H:%M:%S %d/%m/%Y"))  # noqa
 
@@ -198,14 +245,6 @@ class HIVECOTEV1_MY(HIVECOTEV1):
                 datetime.now().strftime("%H:%M:%S %d/%m/%Y"),
             )
             print("RISE weight = " + str(self.rise_weight_))  # noqa
-
-        # Build cBOSS
-        self._cboss = ContractableBOSS(
-            **self._cboss_params,
-            random_state=self.random_state,
-            n_jobs=self._threads_to_use,
-        )
-        self._cboss.fit(X, y)
 
         # Find cBOSS weight using train set estimate
         train_probs = self._cboss._get_train_probs(X, y)
@@ -426,3 +465,36 @@ class TimeSeriesCnnModel(nn.Module):
         data = self.conv(xb)
         data = torch.flatten(data, start_dim=1)
         return self.linear(data)
+
+
+class LSTM(nn.Module):
+
+    def __init__(self, num_classes, input_size, hidden_size, num_layers, seq_length):
+        super(LSTM, self).__init__()
+
+        self.num_classes = num_classes
+        self.num_layers = num_layers
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.seq_length = seq_length
+
+        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
+                            num_layers=num_layers, batch_first=True)
+
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        h_0 = Variable(torch.zeros(
+            self.num_layers, x.size(0), self.hidden_size))
+
+        c_0 = Variable(torch.zeros(
+            self.num_layers, x.size(0), self.hidden_size))
+
+        # Propagate input through LSTM
+        ula, (h_out, _) = self.lstm(x, (h_0, c_0))
+
+        h_out = h_out.view(-1, self.hidden_size)
+
+        out = self.fc(h_out)
+
+        return out
