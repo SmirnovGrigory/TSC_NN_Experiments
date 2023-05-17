@@ -478,20 +478,45 @@ class LSTM(nn.Module):
         self.hidden_size = hidden_size
         self.seq_length = seq_length
 
+        self.conv = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+
+            nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+
+            nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+        )
+
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
                             num_layers=num_layers, batch_first=True)
 
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
+        #print(x.size(0))
         h_0 = Variable(torch.zeros(
             self.num_layers, x.size(0), self.hidden_size))
 
         c_0 = Variable(torch.zeros(
             self.num_layers, x.size(0), self.hidden_size))
 
+        data = self.conv(x)
+        #print(data.shape)
+        #data = torch.flatten(data, start_dim=1)
+        #print(data.shape)
         # Propagate input through LSTM
-        ula, (h_out, _) = self.lstm(x, (h_0, c_0))
+        ula, (h_out, _) = self.lstm(data, (h_0, c_0))
 
         h_out = h_out.view(-1, self.hidden_size)
 

@@ -109,7 +109,7 @@ def train_loop(model, epochs, scheduler, optim, loss_fn, dataloader_train, datal
             optim.zero_grad()
             loss.backward()
             optim.step()
-            scheduler.step(loss)
+            #scheduler.step(loss)
 
             if i % 10 == 0:
                 print(f"train loss: {loss.item():>5f}")
